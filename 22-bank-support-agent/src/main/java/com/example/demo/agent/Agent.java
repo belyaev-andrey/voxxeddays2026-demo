@@ -21,7 +21,7 @@ import org.springframework.util.StringUtils;
  * Agent<SupportDependencies, SupportOutput> supportAgent =
  *     Agent.builder(chatClientBuilder, SupportDependencies.class, SupportOutput.class)
  *         .name("bank-support")
- *         .model("claude-sonnet-4-6")
+ *         .model("gemini-3.1-pro-preview")
  *         .instructions("You are a support agent in our bank ...")
  *         .capabilities(customerContext, refundsSkills, sessionMemory)
  *         .build();

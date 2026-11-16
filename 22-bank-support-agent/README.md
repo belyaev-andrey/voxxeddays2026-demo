@@ -2,15 +2,16 @@
 
 A Spring AI port of the Pydantic AI [bank support agent](https://pydantic.dev/docs/ai/overview/#putting-it-together-a-bank-support-agent) example.
 The agent answers a bank customer's questions, looks up account data through tools, loads a refund policy on demand,
-converts the balance to other currencies through an MCP server, remembers the conversation across turns, and always
-returns a typed result: support advice, a block-card decision, and a risk score.
+answers fee and card questions from the bank's documents (RAG), converts the balance to other currencies through an
+MCP server, remembers the conversation across turns, and always returns a typed result: support advice, a block-card
+decision, and a risk score.
 
 The module ships the same agent in two styles:
 
 | Variant | Main class | What it shows |
 |---|---|---|
-| Classic | `com.example.demo.BankSupportApplication` | A plain `ChatClient` with tools, tool context, structured output, skills, MCP tools and session memory |
-| Agent facade | `com.example.demo.agent.BankSupportAgentApplication` | A declarative `Agent<Deps, Output>` assembled from pluggable `Capability` objects (including an MCP toolset), mirroring Pydantic AI v2 capabilities and harness |
+| Classic | `com.example.demo.BankSupportApplication` | A plain `ChatClient` with tools, tool context, structured output, skills, RAG, MCP tools and session memory |
+| Agent facade | `com.example.demo.agent.BankSupportAgentApplication` | A declarative `Agent<Deps, Output>` assembled from pluggable `Capability` objects (including RAG and an MCP toolset), mirroring Pydantic AI v2 capabilities and harness |
 
 ## Pydantic AI to Spring AI mapping
 
@@ -24,6 +25,7 @@ The module ships the same agent in two styles:
 | `refunds` capability with `defer_loading=True` | `refunds` skill loaded on demand through `SkillsTool` |
 | Harness `Skills('.agents/skills')` | `SkillsCapability` |
 | Harness `Memory(store)` | `SessionMemoryCapability` wrapping Spring AI's session advisors (`SessionAdvisors`) |
+| Retrieval from a vector store before each model request | `RagCapability` wrapping `QuestionAnswerAdvisor` over the `KnowledgeBase` vector store (classic variant: the advisor directly) |
 | `MCPServerStdio(...)` toolset | `McpCapability` over the MCP client starter's `McpSyncClient`s (classic variant: the auto-configured `ToolCallbackProvider`) |
 | `DatabaseConn` over in-memory SQLite | `DatabaseConn` over in-memory H2 via `JdbcClient` |
 
@@ -31,19 +33,25 @@ The module ships the same agent in two styles:
 
 - Java 17+
 - Maven 3.6+
-- `ANTHROPIC_API_KEY` for the Claude model
+- Access to Gemini (`gemini-3.1-pro-preview`), one of these two:
+  - `GOOGLE_API_KEY` for the Gemini Developer API, from https://aistudio.google.com/apikey
+  - `GOOGLE_CLOUD_PROJECT` and a `gcloud auth application-default login` for Vertex AI
 - `BRAVE_API_KEY` for the agent facade variant (its web search capability refuses to build without one); not needed by the classic variant
 - Node.js 24+ and `npx`: both variants start the exchange-rate MCP server with `npx -y @cyanheads/exchange-rates-mcp-server`
 - Internet access for the npm download on first start and for the Frankfurter (ECB) API the server queries
+- Internet access on first start for the local ONNX embedding model (~90 MB). It is cached in `~/.spring-ai/model-cache` for later runs.
 
 ## Running
 
-Set your API key:
+Set your credentials:
 
 ```bash
-export ANTHROPIC_API_KEY=your-key-here
-export BRAVE_API_KEY=your-brave-key   # required by the facade variant only
+export GOOGLE_API_KEY=your-key-here           # or: export GOOGLE_CLOUD_PROJECT=your-project (Vertex AI)
+export BRAVE_API_KEY=your-brave-key           # required by the facade variant only
 ```
+
+To run on Claude instead, swap `spring-ai-starter-model-google-genai` for the commented-out Anthropic starter in
+`pom.xml`, swap the property blocks in `application.properties`, and change the `.model(...)` id in `BankSupportAgentApplication`.
 
 Run the classic variant (the default main class):
 
@@ -75,6 +83,9 @@ SupportOutput[supportAdvice=John, I'm sorry to hear that. I have blocked your ca
 USER: I was charged twice for the same coffee. Where is my refund?
 SupportOutput[supportAdvice=John, your $9.99 refund for the duplicate charge was approved on 2026-08-20 ..., blockCard=false, risk=1]
 
+USER: How much does it cost to pay with my card abroad?
+SupportOutput[supportAdvice=John, card payments in a currency other than USD have a 1.5% foreign transaction fee ..., blockCard=false, risk=0]
+
 - TOOL-CALL: customerBalance ({})
 - TOOL-CALL: fx_convert_currency ({"amount":123.45,"from":"USD","to":"EUR"})
 USER: What is my balance in euros?
@@ -92,6 +103,7 @@ src/main/java/com/example/demo/
 ├── SupportOutput.java               # Structured output record (advice, blockCard, risk)
 ├── SupportTools.java                # customerBalance and refundStatus tools reading deps from ToolContext
 ├── DatabaseConn.java                # JdbcClient wrapper over the in-memory H2 customers table
+├── KnowledgeBase.java               # Loads knowledge/*.md into a SimpleVectorStore, builds the RAG advisor
 └── agent/
     ├── Agent.java                   # Agent<D, O> facade and builder over ChatClient
     ├── BankSupportAgentApplication.java  # Facade variant: agent assembled from capabilities
@@ -99,15 +111,17 @@ src/main/java/com/example/demo/
         ├── Capability.java          # Plug interface: instrument / instructions(deps) / beforeRequest
         ├── DefaultCapability.java   # Bundle of (dynamic) instructions and @Tool objects
         ├── SkillsCapability.java    # Injects SkillsTool for on-demand SKILL.md loading
-        ├── SessionMemoryCapability.java  # Injects SessionMemoryAdvisor, resolves session id from deps
+        ├── SessionMemoryCapability.java  # Injects SessionAdvisors, resolves session id from deps
+        ├── RagCapability.java       # Injects QuestionAnswerAdvisor over the knowledge base
         ├── AdvisorCapability.java   # Escape hatch to plug any Spring AI Advisor
         ├── WebFetchCapability.java  # Injects SmartWebFetchTool
         ├── WebSearchCapability.java # Injects BraveWebSearchTool
         └── McpCapability.java       # Exposes one MCP server's tools, optionally filtered
 src/main/resources/
-├── application.properties           # Model, API key, skills dir, MCP client config
+├── application.properties           # Model, API key, skills dir, knowledge docs, MCP client config
 ├── schema.sql / data.sql            # customers table with one row: 123, John, 123.45
 ├── skills/refunds/SKILL.md          # Refund policy skill, loaded by the model on demand
+├── knowledge/*.md                   # RAG documents: card fees, transfers, card replacement, overdraft
 └── mcp-servers-config.json          # Stdio MCP server: exchange rates (ECB via Frankfurter), started with npx
 ```
 
@@ -144,6 +158,34 @@ The `refunds` skill in `src/main/resources/skills/refunds/SKILL.md` contains the
 `refundStatus` tool. The `SkillsTool` from spring-ai-agent-utils initially exposes only the skill's name and description.
 The model loads the full instructions only when a refund question comes up, the same idea as Pydantic AI's deferred capabilities.
 
+### Knowledge base (RAG)
+
+The `knowledge/` folder holds four short documents: card fees abroad, money transfers, card replacement and overdraft.
+At startup, `KnowledgeBase.load(...)` reads them, splits them into chunks and embeds them into a `SimpleVectorStore`.
+The embedding model is the local ONNX `all-MiniLM-L6-v2` from `spring-ai-starter-model-transformers`, so RAG needs no
+extra API key.
+
+`QuestionAnswerAdvisor` searches the store with each question and adds the matching chunks to the prompt:
+
+```java
+QuestionAnswerAdvisor.builder(vectorStore)
+    .searchRequest(SearchRequest.builder().topK(3).similarityThreshold(0.45).build())
+    .order(Ordered.HIGHEST_PRECEDENCE + 200)
+    .build();
+```
+
+- The order puts the advisor before the tool-calling advisor (`HIGHEST_PRECEDENCE + 300`). The search then runs once
+  per question and not again on each round of the tool loop.
+- The threshold keeps unrelated chunks out of the prompt. The card questions score 0.49 to 0.64 on their documents.
+  The balance, refund and exchange-rate questions score 0.36 or less, so they get no chunk.
+- The advisor uses its own prompt template. The default template tells the model to refuse any question that the
+  context does not answer. The advisor adds that template also when no chunk passes the threshold, so the balance
+  questions would get an empty context and an order to refuse. The custom template tells the model to use the tools
+  and skills when the documents do not apply.
+
+RAG and the `refunds` skill complement each other. The skill is a procedure that the model loads when it decides to.
+The knowledge base is reference text that the advisor always searches.
+
 ### MCP tools
 
 `mcp-servers-config.json` declares the `exchange-rates` server, started over stdio with `npx`. The Spring AI MCP client
@@ -176,15 +218,15 @@ and a list of capabilities. Each `Capability` has three optional hooks:
 - `instructions(deps)` runs on every call and contributes a system prompt fragment resolved from the deps.
 - `beforeRequest(spec, deps)` runs on every call to customize the outgoing request, for example to set the session id.
 
-The facade variant composes seven capabilities:
+The facade variant composes eight capabilities:
 
 ```java
 Agent<SupportDependencies, SupportOutput> supportAgent =
     Agent.builder(chatClientBuilder, SupportDependencies.class, SupportOutput.class)
         .name("bank-support")
-        .model("claude-sonnet-4-6")
+        .model("gemini-3.1-pro-preview")
         .instructions("You are a support agent in our bank, ...")
-        .capabilities(customerContext, refundsSkills, memory, logging, webFetch, webSearch, exchangeRates)
+        .capabilities(customerContext, refundsSkills, memory, knowledge, logging, webFetch, webSearch, exchangeRates)
         .build();
 
 SupportOutput out = supportAgent.run("What is my balance?", new SupportDependencies(123, db));
@@ -226,6 +268,9 @@ classDiagram
         -SessionService sessionService
         -Function sessionIdResolver
     }
+    class RagCapability~D~ {
+        -VectorStore vectorStore
+    }
     class AdvisorCapability~D~ {
         -List~Advisor~ advisors
     }
@@ -263,6 +308,7 @@ classDiagram
     Capability <|.. DefaultCapability
     Capability <|.. SkillsCapability
     Capability <|.. SessionMemoryCapability
+    Capability <|.. RagCapability
     Capability <|.. AdvisorCapability
     Capability <|.. WebFetchCapability
     Capability <|.. WebSearchCapability
@@ -272,6 +318,7 @@ classDiagram
     SupportDependencies --> DatabaseConn
     SkillsCapability ..> ChatClient : SkillsTool
     SessionMemoryCapability ..> ChatClient : SessionAdvisors
+    RagCapability ..> ChatClient : QuestionAnswerAdvisor
     AdvisorCapability ..> ChatClient : MyLoggingAdvisor
     WebFetchCapability ..> ChatClient : SmartWebFetchTool
     WebSearchCapability ..> ChatClient : BraveWebSearchTool
@@ -293,7 +340,7 @@ sequenceDiagram
     participant Cap as each Capability
 
     App->>B: Agent.builder(chatClientBuilder, Deps.class, Output.class)
-    App->>B: .name(..).model(..).instructions(..).capabilities(c1..c7)
+    App->>B: .name(..).model(..).instructions(..).capabilities(c1..c8)
     App->>B: .build()
     B->>CB: clone(), defaultOptions(model)
     loop for each capability
@@ -313,8 +360,9 @@ sequenceDiagram
     participant App as CLI runner
     participant A as Agent
     participant Cap as Capabilities
-    participant CC as ChatClient<br/>(SessionAdvisors, MyLoggingAdvisor)
-    participant LLM as Claude
+    participant CC as ChatClient<br/>(QuestionAnswerAdvisor, SessionAdvisors, MyLoggingAdvisor)
+    participant KB as KnowledgeBase<br/>(SimpleVectorStore)
+    participant LLM as Gemini
     participant T as SupportTools
     participant DB as DatabaseConn / H2
     participant MCP as exchange-rates MCP server<br/>(npx, stdio)
@@ -328,7 +376,9 @@ sequenceDiagram
     A->>Cap: beforeRequest(spec, deps)
     Cap->>CC: advisor param sessionId = "support-session-customer-123"
     A->>CC: call().entity(SupportOutput.class)
-    CC->>CC: SessionMemoryAdvisor loads earlier turns
+    CC->>KB: QuestionAnswerAdvisor: similaritySearch(query, topK 3, threshold 0.45)
+    KB-->>CC: no chunk passes the threshold for this question
+    CC->>CC: session advisors load earlier turns
     CC->>LLM: messages + tool definitions (customerBalance, refundStatus, Skill, WebFetch, WebSearch, fx_*)
     LLM-->>CC: tool_use customerBalance
     CC->>T: customerBalance(ToolContext{deps})
@@ -341,7 +391,7 @@ sequenceDiagram
     MCP-->>CC: converted amount (ECB rate from Frankfurter)
     CC->>LLM: tool result
     LLM-->>CC: JSON matching the SupportOutput schema
-    CC->>CC: SessionMemoryAdvisor saves the turn, schema validated
+    CC->>CC: session advisors save the turn, schema validated
     CC-->>A: SupportOutput
     A-->>App: SupportOutput(advice, blockCard=false, risk)
 ```
@@ -352,11 +402,13 @@ passed as an advisor parameter.
 
 ## Dependencies
 
-- `spring-ai-starter-model-anthropic` for the Claude chat model
+- `spring-ai-starter-model-google-genai` for the Gemini chat model (the Anthropic starter is commented out)
 - `spring-ai-session-advisor` (Spring AI) for `SessionAdvisors`
 - `spring-ai-agent-utils` for `SkillsTool`, `SmartWebFetchTool` and `BraveWebSearchTool`
 - `spring-boot-starter-jdbc` and H2 for the in-memory customer database
 - `spring-ai-starter-mcp-client` for the stdio MCP client, `SyncMcpToolCallbackProvider` and the auto-configured `ToolCallbackProvider`
+- `spring-ai-starter-model-transformers` for the local ONNX embedding model
+- `spring-ai-vector-store-advisor` for `QuestionAnswerAdvisor` and `SimpleVectorStore`
 - The repository's `common` module for `MyLoggingAdvisor`
 
 ## Notes

@@ -3,6 +3,7 @@ package com.example.demo.agent;
 import java.util.List;
 
 import com.example.demo.DatabaseConn;
+import com.example.demo.KnowledgeBase;
 import com.example.demo.MyLoggingAdvisor;
 import com.example.demo.SupportDependencies;
 import com.example.demo.SupportOutput;
@@ -10,6 +11,7 @@ import com.example.demo.SupportTools;
 import com.example.demo.agent.capabilities.AdvisorCapability;
 import com.example.demo.agent.capabilities.Capability;
 import com.example.demo.agent.capabilities.McpCapability;
+import com.example.demo.agent.capabilities.RagCapability;
 import com.example.demo.agent.capabilities.SessionMemoryCapability;
 import com.example.demo.agent.capabilities.SkillsCapability;
 import com.example.demo.agent.capabilities.WebFetchCapability;
@@ -18,9 +20,11 @@ import com.example.demo.agent.capabilities.WebSearchCapability;
 import io.modelcontextprotocol.client.McpSyncClient;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -48,8 +52,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * Each capability is a plug that instruments the ChatClient: {@code customer_context}
  * contributes dynamic instructions and tools, {@link SkillsCapability} injects the
  * on-demand SkillsTool, {@link SessionMemoryCapability} injects Spring AI's session
- * advisors, and {@link McpCapability} exposes the tools of the exchange-rate
- * MCP server declared in {@code mcp-servers-config.json}.
+ * advisors, {@link RagCapability} injects the QuestionAnswerAdvisor over the
+ * bank's {@link KnowledgeBase}, and {@link McpCapability} exposes the tools of the
+ * exchange-rate MCP server declared in {@code mcp-servers-config.json}.
  *
  * Run with: {@code mvn spring-boot:run
  * -Dspring-boot.run.main-class=com.example.demo.agent.BankSupportAgentApplication}
@@ -75,10 +80,17 @@ public class BankSupportAgentApplication {
 		return DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
 	}
 
+	/** The bank's documents, embedded once at startup for the RAG capability. */
+	@Bean
+	VectorStore knowledgeBase(EmbeddingModel embeddingModel, @Value("${agent.knowledge.docs}") Resource[] documents) {
+		return KnowledgeBase.load(embeddingModel, documents);
+	}
+
 	@Bean
 	CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DatabaseConn db, SessionService sessionService,
 			@Value("${agent.skills.dirs}") List<Resource> skillsDirs,
-			@Value("${BRAVE_API_KEY:#{null}}") String braveApiKey, List<McpSyncClient> mcpClients) {
+			@Value("${BRAVE_API_KEY:#{null}}") String braveApiKey, List<McpSyncClient> mcpClients,
+			VectorStore knowledgeBase) {
 
 		return args -> { // @formatter:off
 
@@ -95,6 +107,9 @@ public class BankSupportAgentApplication {
 			var memory = new SessionMemoryCapability<SupportDependencies>(sessionService, "john",
 					deps -> "support-session-customer-" + deps.customerId());
 
+			// RAG: the matching knowledge base chunks are added to every prompt
+			var knowledge = new RagCapability<SupportDependencies>(knowledgeBase);
+
 			var logging = new AdvisorCapability<SupportDependencies>("logging", MyLoggingAdvisor.builder().build());
 
 			var webFetch = new WebFetchCapability<SupportDependencies>(chatClientBuilder.clone().build());
@@ -109,10 +124,11 @@ public class BankSupportAgentApplication {
 			var agentBuilder =
 				Agent.builder(chatClientBuilder, SupportDependencies.class, SupportOutput.class)
 					.name("bank-support")
-					.model("claude-sonnet-4-6")
+					.model("gemini-3.1-pro-preview")
 					.instructions("You are a support agent in our bank, give the "
 							+ "customer support and judge the risk level of their query.")
-					.capabilities(customerContext, refundsSkills, memory, logging, webFetch, webSearch, exchangeRates);
+					.capabilities(customerContext, refundsSkills, memory, knowledge, logging, webFetch, webSearch,
+							exchangeRates);
 
 
 			Agent<SupportDependencies, SupportOutput> supportAgent = agentBuilder.build();
@@ -123,6 +139,7 @@ public class BankSupportAgentApplication {
 					"What is my balance?",
 					"I just lost my card!",
 					"I was charged twice for the same coffee. Where is my refund?",
+					"How much does it cost to pay with my card abroad?",
 					"What is the current ECB main refinancing interest rate?",
 					"What is my balance in euros?"
 				)) {
