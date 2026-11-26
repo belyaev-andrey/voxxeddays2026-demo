@@ -87,6 +87,7 @@ public class BankSupportAgentApplication {
 	}
 
 	@Bean
+	@Profile("!mcp-only")
 	CommandLineRunner cli(ChatClient.Builder chatClientBuilder, DatabaseConn db, SessionService sessionService,
 			@Value("${agent.skills.dirs}") List<Resource> skillsDirs,
 			@Value("${BRAVE_API_KEY:#{null}}") String braveApiKey, List<McpSyncClient> mcpClients,

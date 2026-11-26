@@ -29,6 +29,15 @@ public class DatabaseConn {
 			.optional();
 	}
 
+	public String refundStatus(int id) {
+		if (customerName(id).isEmpty()) {
+			throw new IllegalArgumentException("Customer not found");
+		}
+		// The demo uses one sample refund for each seeded customer.
+		return "Customer %d has one pending refund: $9.99 for a duplicate charge, approved on 2026-08-20."
+			.formatted(id);
+	}
+
 	public double customerBalance(int id) {
 		return this.jdbcClient.sql("SELECT balance FROM customers WHERE id = :id")
 			.param("id", id)

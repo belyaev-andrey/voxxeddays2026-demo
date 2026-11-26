@@ -94,6 +94,23 @@ SupportOutput[supportAdvice=John, your balance of $123.45 is about EUR 1xx.xx at
 
 The facade variant adds a question about the current ECB interest rate, which exercises the web search and web fetch tools, before the euro question.
 
+## Bank MCP server
+
+Both entry points serve Streamable HTTP at `http://127.0.0.1:8080/mcp`. Connect an MCP client to this URL and list the tools.
+
+| Tool | Example arguments | Result |
+|---|---|---|
+| `customerBalance` | `{"customerId":123}` | The account balance in USD. John has 123.45. |
+| `refundStatus` | `{"customerId":123}` | The sample pending refund, with its amount and approval date. |
+| `searchBankPolicies` | `{"query":"How long does a SWIFT transfer take?"}` | Matching passages and their source filenames from the agent's live vector store. |
+
+The regular demo also uses its exchange-rate MCP client. To serve only the bank tools, run the following command from the repository root.
+The `mcp-only` profile skips the scripted conversations and the exchange-rate client. Policy search uses the local embedding model.
+
+```bash
+mvn -f 22-bank-support-agent/pom.xml spring-boot:run -Dspring-boot.run.profiles=mcp-only
+```
+
 ## Project layout
 
 ```
@@ -406,6 +423,7 @@ passed as an advisor parameter.
 - `spring-ai-session-advisor` (Spring AI) for `SessionAdvisors`
 - `spring-ai-agent-utils` for `SkillsTool`, `SmartWebFetchTool` and `BraveWebSearchTool`
 - `spring-boot-starter-jdbc` and H2 for the in-memory customer database
+- `spring-ai-starter-mcp-server-webmvc` for the bank MCP endpoint
 - `spring-ai-starter-mcp-client` for the stdio MCP client, `SyncMcpToolCallbackProvider` and the auto-configured `ToolCallbackProvider`
 - `spring-ai-starter-model-transformers` for the local ONNX embedding model
 - `spring-ai-vector-store-advisor` for `QuestionAnswerAdvisor` and `SimpleVectorStore`

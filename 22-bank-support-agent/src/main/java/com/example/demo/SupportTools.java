@@ -19,9 +19,7 @@ public class SupportTools {
 	@Tool(description = "Returns the status of the customer's pending refunds.")
 	public String refundStatus(ToolContext toolContext) {
 		SupportDependencies deps = dependencies(toolContext);
-		// Stand-in for a real refunds backend lookup.
-		return "Customer %d has one pending refund: $9.99 for a duplicate charge, approved on 2026-08-20."
-			.formatted(deps.customerId());
+		return deps.db().refundStatus(deps.customerId());
 	}
 
 	private static SupportDependencies dependencies(ToolContext toolContext) {

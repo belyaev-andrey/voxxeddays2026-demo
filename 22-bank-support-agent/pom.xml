@@ -54,8 +54,11 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-mcp-client</artifactId>
 		</dependency>
-		<!-- The ObservationRegistry bean: without it Spring AI observes nothing, and the IDE's app trace capture
-		     (Spring Debugger + Air) shows "No observation registry". No web server runs (web-application-type=none). -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+		</dependency>
+		<!-- The ObservationRegistry bean enables app trace capture in the Spring Debugger. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
