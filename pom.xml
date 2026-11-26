@@ -56,6 +56,7 @@
 		<module>20-memory-session</module>
 		<module>21-guardrails-ontology-checker</module>
 		<module>22-bank-support-agent</module>
+		<module>22-1-bank-support-langfuse</module>
 		<module>23-multimodality/23-multimodality-1-vision-chat</module>
 		<module>23-multimodality/23-multimodality-2-image-generation</module>
 		<module>23-multimodality/23-multimodality-3-speech-and-transcription</module>
